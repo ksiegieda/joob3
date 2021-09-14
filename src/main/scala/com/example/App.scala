@@ -29,8 +29,8 @@ object App {
     val groupId = "testgroup"
     val offsetReset = "earliest"
     val pollTimeout = "5000"
-    var Array(topicc, tableName) = args
     val brokers = "maprdemo:9092" // not needed for MapR Streams
+    val topicc = "/apps/stream:read"
 
     val sparkConf = new SparkConf()
       .setAppName(App.getClass.getName)
@@ -41,7 +41,6 @@ object App {
     val topicsSet = topicc.split(",").toSet
 
     val kafkaParams = Map[String, String](
-      ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> brokers,
       ConsumerConfig.GROUP_ID_CONFIG -> groupId,
       ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG ->
         "org.apache.kafka.common.serialization.StringDeserializer",
@@ -52,18 +51,34 @@ object App {
       "spark.kafka.poll.time" -> pollTimeout
     )
 
-    val consumerStrategy = ConsumerStrategies.Subscribe[String, String](topicsSet, kafkaParams)
+    val consumerStrategy = ConsumerStrategies.Subscribe[String, String](Set("/apps/stream:read"), kafkaParams)
     val messagesDStream = KafkaUtils.createDirectStream[String, String](
       ssc, LocationStrategies.PreferConsistent, consumerStrategy
     )
     // get the message value from message key value pair
     val valuesDStream = messagesDStream.map(_.value())
 
-    println(messagesDStream)
+//  printuje executorami
+    messagesDStream.foreachRDD(batchRDD => {
+      batchRDD.foreachPartition {
+        iter => {
+          val elemsOnParition = iter.toList
+          elemsOnParition.map { elem =>
+            println(elem.value)
+          }
+        }
+      }
+    })
+
+//  println(messagesDStream)
     System.out.println("received message stream")
+    // printuje batchowo na driverze
     valuesDStream.count
     valuesDStream.print
 
+    ssc.start()
+    ssc.awaitTermination()
+    ssc.stop(stopSparkContext = true, stopGracefully = true)
   }
 
 }
