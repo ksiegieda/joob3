@@ -1,44 +1,40 @@
 package com.example
 
+import com.mapr.db.spark.sql.toMapRDBDataFrame
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.spark._
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.kafka09.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.ojai.store.DriverManager
+import org.ojai.{Document, DocumentStream, Value}
 
+import scala.collection.JavaConverters._
 
-object App {
+  object App {
 
-//  case class UberC(dt: String, lat: Double, lon: Double, cid: Integer, clat: Double, clon: Double, base: String) extends Serializable
-//  final val cfDataBytes = Bytes.toBytes("data")
-//  final val colLatBytes = Bytes.toBytes("lat")
-//  final val colLonBytes = Bytes.toBytes("lon")
-//
-//  def convertToPut(uber: String): (Put) = {
-//    val uberp = JSONUtil.fromJson[UberC](uber)
-//    // create a composite row key: uberid_date time
-//    val rowkey = uberp.cid + "_" + uberp.base + "_" + uberp.dt
-//    val put = new Put(Bytes.toBytes(rowkey))
-//    // add to column family data, column data values to put object
-//    put.addColumn(cfDataBytes, colLatBytes, Bytes.toBytes(uberp.lon))
-//    put.addColumn(cfDataBytes, colLonBytes, Bytes.toBytes(uberp.lat))
-//    return put
-//  }
+    def tryGetInt(x:Document, field:String): Option[Int] = x.getValue(field).getType.getCode match {
+      case none if none == Value.Type.NULL.getCode => None
+      case int if int == Value.Type.INT.getCode => Some(x.getInt(field))
+    }
+    def tryGetString(x:Document, field:String): Option[String] = x.getValue(field).getType.getCode match {
+      case none if none == Value.Type.NULL.getCode => None
+      case str if str == Value.Type.STRING.getCode => Some(x.getString(field))
+    }
+    def tryGetDouble(x:Document, field:String): Option[Double] = x.getValue(field).getType.getCode match {
+      case none if none == Value.Type.NULL.getCode => None
+      case double if double == Value.Type.DOUBLE.getCode => Some(x.getDouble(field))
+    }
 
   def main(args: Array[String]) = {
 
     val groupId = "testgroup"
     val offsetReset = "earliest"
     val pollTimeout = "5000"
-    val brokers = "maprdemo:9092" // not needed for MapR Streams
-    val topicc = "/apps/stream:read"
 
-    val sparkConf = new SparkConf()
-      .setAppName(App.getClass.getName)
-
+    val sparkConf = new SparkConf().setAppName(App.getClass.getName)
     val sc = new SparkContext(sparkConf)
     val ssc = new StreamingContext(sc, Seconds(2))
-
-    val topicsSet = topicc.split(",").toSet
 
     val kafkaParams = Map[String, String](
       ConsumerConfig.GROUP_ID_CONFIG -> groupId,
@@ -53,32 +49,106 @@ object App {
 
     val consumerStrategy = ConsumerStrategies.Subscribe[String, String](Set("/apps/stream:read"), kafkaParams)
     val messagesDStream = KafkaUtils.createDirectStream[String, String](
-      ssc, LocationStrategies.PreferConsistent, consumerStrategy
-    )
-    // get the message value from message key value pair
-    val valuesDStream = messagesDStream.map(_.value())
+      ssc, LocationStrategies.PreferConsistent, consumerStrategy)
 
-//  printuje executorami
-    messagesDStream.foreachRDD(batchRDD => {
-      batchRDD.foreachPartition {
-        iter => {
-          val elemsOnParition = iter.toList
-          elemsOnParition.map { elem =>
-            println(elem.value)
-          }
+//  optymalne - print executorami
+//    messagesDStream.foreachRDD(batchRDD => {
+//      batchRDD.foreachPartition {
+//        iter => {
+//          val elemsOnParition = iter.toList
+//          elemsOnParition.map { elem =>
+//            println(elem.value)
+//          }
+//        }
+//      }
+//    })
+
+//    nieoptymalne - print batchowo na driverze
+//    val valuesDStream = messagesDStream.map(_.value())
+//    valuesDStream.count
+//    valuesDStream.print
+
+    val sadStream = messagesDStream.mapPartitions (iterator => {
+      val connection = DriverManager.getConnection("ojai:mapr:")
+      val store = connection.getStore("/tables/movie")
+
+      val list = iterator
+        .map(record => record.value())
+        .toList
+        .asJava
+      val query = connection
+        .newQuery()
+        .where(connection.newCondition()
+            .in("_id", list)
+            .build())
+        .build()
+
+      //TODO: findQuery is deprecated
+      val result: DocumentStream = store.findQuery(query)
+        result.asScala.toList.map(x => Movie(x.getString("_id"), x.getString("imdb_title_id"), x.getString("title"),
+        x.getString("original_title"), tryGetInt(x, "year"), x.getString("date_published"),
+        x.getString("genre"), tryGetInt(x, "duration"), tryGetString(x, "country_id"),
+        tryGetString(x, "language"), tryGetString(x, "director"), tryGetString(x, "writer"),
+        tryGetString(x, "production_company"), tryGetString(x, "actors"),
+        tryGetString(x, "description"), x.getDouble("avg_vote"),
+        x.getInt("votes"), tryGetString(x, "budget"), tryGetString(x, "usa_gross_income"),
+        tryGetString(x, "worlwide_gross_income"), tryGetDouble(x, "metascore"),
+        tryGetDouble(x, "reviews_from_users"), tryGetDouble(x, "reviews_from_critics"))).toIterator
+
+//TODO: close the store and OJAI connection
+    }
+    )
+
+    sadStream.foreachRDD(batchRDD => {
+      val futureDS = batchRDD.mapPartitions {
+        iterator => {
+          val movieList = iterator.toList
+          val stringList = movieList.flatMap {
+            x => x.country_id
+              .getOrElse("")
+              .split(", ")}
+            .filterNot(_.isEmpty)
+            .distinct
+
+          val connection = DriverManager.getConnection("ojai:mapr:")
+          val store = connection.getStore("/tables/country")
+          val query = connection
+            .newQuery()
+            .where(connection.newCondition()
+              .in("_id", stringList.asJava)
+              .build())
+            .build()
+
+          val result: DocumentStream = store.findQuery(query)
+          val resMap = result
+            .asScala
+            .toList
+            .map(x => (x.getString("_id"), x.getString("country"))).toMap
+
+          val incompleteFullMovie: List[FullMovie] = movieList.map(_.as[FullMovie])
+          val FullMovieList = incompleteFullMovie.map(
+            movie => movie.copy(
+              country = movie.country_id match {
+                case Some(x) => Some(x.split(", ").map(resMap(_)).mkString(","))
+                case None => None
+              }
+            )
+          )
+          val withUUID = FullMovieList.map((movie => movie.copy(_id = java.util.UUID.randomUUID().toString)))
+          withUUID.toIterator
         }
       }
-    })
-
-//  println(messagesDStream)
-    System.out.println("received message stream")
-    // printuje batchowo na driverze
-    valuesDStream.count
-    valuesDStream.print
+      val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
+      import spark.implicits._
+      val ds = futureDS.toDS()
+      ds.saveToMapRDB("tables/movie_enriched_with_country")
+    }
+    )
 
     ssc.start()
     ssc.awaitTermination()
     ssc.stop(stopSparkContext = true, stopGracefully = true)
+//    TODO: add methods
   }
 
 }

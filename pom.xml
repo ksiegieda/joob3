@@ -129,6 +129,11 @@
             </exclusions>
         </dependency>
         <dependency>
+            <groupId>org.ojai</groupId>
+            <artifactId>ojai-scala</artifactId>
+            <version>${ojai.version}</version>
+        </dependency>
+        <dependency>
             <artifactId>mapr-ojai-driver</artifactId>
             <groupId>com.mapr.ojai</groupId>
             <version>${mapr.library.version}</version>
