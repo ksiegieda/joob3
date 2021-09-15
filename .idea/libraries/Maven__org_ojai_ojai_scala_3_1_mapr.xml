@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="Maven: org.ojai:ojai-scala:3.1-mapr">
+    <CLASSES>
+      <root url="jar://$MAVEN_REPOSITORY$/org/ojai/ojai-scala/3.1-mapr/ojai-scala-3.1-mapr.jar!/" />
+    </CLASSES>
+    <JAVADOC>
+      <root url="jar://$MAVEN_REPOSITORY$/org/ojai/ojai-scala/3.1-mapr/ojai-scala-3.1-mapr-javadoc.jar!/" />
+    </JAVADOC>
+    <SOURCES>
+      <root url="jar://$MAVEN_REPOSITORY$/org/ojai/ojai-scala/3.1-mapr/ojai-scala-3.1-mapr-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>
