@@ -1,14 +1,17 @@
 package com.example
 
+import com.mapr.db.spark.sql.toSparkSessionFunctions
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions.udf
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.streaming.kafka09.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.spark.{SparkConf, SparkContext}
 import org.ojai.store.DriverManager
 import org.ojai.{Document, DocumentStream, Value}
 
+import java.util.UUID
 import scala.collection.JavaConverters._
 
   object App {
@@ -107,45 +110,44 @@ import scala.collection.JavaConverters._
       val futureDS = batchRDD.mapPartitions {
         iterator => {
           val movieList = iterator.toList
-          val stringList = movieList.flatMap {
-            x => x.country_id
-              .getOrElse("")
-              .split(", ")}
-            .filterNot(_.isEmpty)
-            .distinct
-
-          val connection = DriverManager.getConnection("ojai:mapr:")
-          val store = connection.getStore("/tables/country")
-          val query = connection
-            .newQuery()
-            .where(connection.newCondition()
-              .in("_id", stringList.asJava)
-              .build())
-            .build()
-
-          val result: DocumentStream = store.findQuery(query)
-          val resMap = result
-            .asScala
-            .toList
-            .map(x => (x.getString("_id"), x.getString("country"))).toMap
-
           val incompleteFullMovie: List[FullMovie] = movieList.map(_.as[FullMovie])
           incompleteFullMovie.toIterator
+          //TODO: kompletnie niepotrzebne mapowanie Movie na FullMovie, zostawic jako zwykly Movie, potem jest burdel w joinie
         }
       }
-
       val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
       import spark.implicits._
-      val ds = futureDS.toDS()
-//      ds.saveToMapRDB("tables/movie_enriched_with_country")
-      ds.show()
+      val incompleteFullMovies = futureDS.toDS()
+//      incompleteFullMovies.show(10)
+
+      val dictionaryDS = spark.loadFromMapRDB("/tables/country").as[Dictionary]
+//      dictionaryDS.show()
+
+      val dropping: DataFrame = incompleteFullMovies.drop("country")
+      val joined: DataFrame = dropping.join(dictionaryDS, dropping("country_id") <=> dictionaryDS("_id"), "fullouter").drop("_id")
+//      joined.show()
+
+      //TODO: join wyglada zle, ale dlatego, ze slownik zawiera wszystkie kraje, natomiast stream z Joba 2 ograniczono do 20 pierwszych IDkow - trzeba wysylac wszystkie
+      val generateUUID = udf((a:String) => UUID.nameUUIDFromBytes(a.getBytes).toString)
+      val withUUID = joined.withColumn("_id",generateUUID($"country"))
+//      withUUID.show()
+//      withUUID.saveToMapRDB("tables/movie_enriched_with_country")
+
+      //TODO: tu mozna uzyc Kafka Serializera, Mateusz wysylal po pierwszym CR
+      withUUID
+        .selectExpr("CAST(_id AS STRING) AS key", "to_json(struct(*)) AS value")
+        .write.format("kafka")
+        .option("topic","/apps/stream:index")
+        .save()
+
+      //TODO: dalej explode - mozna wziac z pierwszego joba
+
     }
     )
 
     ssc.start()
     ssc.awaitTermination()
     ssc.stop(stopSparkContext = true, stopGracefully = true)
-//    TODO: add methods
   }
-
+    //TODO: jakis refactor by sie przydal, ale to na koniec koniec
 }
