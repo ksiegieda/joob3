@@ -2,6 +2,7 @@ package com.example
 
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.log4j.{Level, Logger}
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.kafka09.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
@@ -33,15 +34,9 @@ import scala.collection.JavaConverters._
     val offsetReset = "earliest"
     val pollTimeout = "5000"
 
-//    val sparkConf = new SparkConf().setAppName(App.getClass.getName)
-//    val sc = new SparkContext(sparkConf)
-//    val ssc = new StreamingContext(sc, Seconds(2))
-
-    val spark = SparkSession
-      .builder
-      .appName("lat-job-3")
-      .getOrCreate()
-    val ssc = new StreamingContext(spark.sparkContext,Seconds(1))
+    val sparkConf = new SparkConf().setAppName(App.getClass.getName)
+    val sc = new SparkContext(sparkConf)
+    val ssc = new StreamingContext(sc, Seconds(2))
 
     val kafkaParams = Map[String, String](
       ConsumerConfig.GROUP_ID_CONFIG -> groupId,
@@ -134,30 +129,16 @@ import scala.collection.JavaConverters._
             .toList
             .map(x => (x.getString("_id"), x.getString("country"))).toMap
 
-//          spark.sparkContext.parallelize()
-          val spark = SparkSession.builder.config(batchRDD.sparkContext.getConf).getOrCreate()
           val incompleteFullMovie: List[FullMovie] = movieList.map(_.as[FullMovie])
-          //parallelize to RDD -> to DS
-          import spark.implicits._
-          val mama = incompleteFullMovie.toDS()
-//          mama.show()
-          val FullMovieList = incompleteFullMovie.map(
-            movie => movie.copy(
-              country = movie.country_id match {
-                case Some(x) => Some(x.split(", ").map(resMap(_)).mkString(","))
-                case None => None
-              }
-            )
-          )
-          val withUUID = FullMovieList.map((movie => movie.copy(_id = java.util.UUID.randomUUID().toString)))
-          withUUID.toIterator
+          incompleteFullMovie.toIterator
         }
       }
-//      val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
-//      import spark.implicits._
-//      val ds = futureDS.toDS()
+
+      val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
+      import spark.implicits._
+      val ds = futureDS.toDS()
 //      ds.saveToMapRDB("tables/movie_enriched_with_country")
-//      ds.show()
+      ds.show()
     }
     )
 
