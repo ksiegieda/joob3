@@ -9,7 +9,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession, functions}
 import org.apache.spark.streaming.kafka09.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.ojai.store.DriverManager
+import org.ojai.store.{DriverManager, Query}
 import org.ojai.{Document, DocumentStream, Value}
 
 import java.util.UUID
@@ -74,7 +74,9 @@ import scala.collection.JavaConverters._
 //    valuesDStream.count
 //    valuesDStream.print
 
+
     val sadStream = messagesDStream.mapPartitions (iterator => {
+      //TODO connection utworzyc raz - done
       val connection = DriverManager.getConnection("ojai:mapr:")
       val store = connection.getStore("/tables/movie")
 
@@ -82,7 +84,7 @@ import scala.collection.JavaConverters._
         .map(record => record.value())
         .toList
         .asJava
-      val query = connection
+      val query: Query = connection
         .newQuery()
         .where(connection.newCondition()
             .in("_id", list)
@@ -107,33 +109,29 @@ import scala.collection.JavaConverters._
     }
     )
 
+//    val spark = SparkSession.builder.getOrCreate()
+
     sadStream.foreachRDD(batchRDD => {
-      val futureDS = batchRDD.mapPartitions {
-        iterator => {
-          val movieList = iterator.toList
-          movieList.toIterator
-        }
-      }
+      //TODO wywalic mapPartitions
+      val futureDS = batchRDD
       val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
       import spark.implicits._
       val incompleteFullMovies = futureDS.toDS()
-//      incompleteFullMovies.show(10)
+      incompleteFullMovies.show(10)
 
-      val dictionaryDS = spark.loadFromMapRDB("/tables/country").as[Dictionary]
-//      dictionaryDS.show()
+      //TODO: odczyt powinien byc wykonywany raz
+      //TODO zmienic nazwe dictionary - done
+      val dictionaryOfCountries = spark.loadFromMapRDB("/tables/country").as[CountryDictionary]
 
-      val dropping = incompleteFullMovies
-      val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, dropping("country_id") <=> dictionaryDS("_id"), "fullouter").drop("_id")
-//      joined.show()
+      //TODO dropping niepotrzebna zmienna - done
+//      val dropping = incompleteFullMovies
+      //TODO inny typ joina
+      val joined: DataFrame = incompleteFullMovies.join(dictionaryOfCountries, incompleteFullMovies("country_id") <=> dictionaryOfCountries("_id"), "fullouter").drop("_id")
 
-//      joined.show()
-//      joined.printSchema()
-//      joined.saveToMapRDB("/tables/test3")
-//      println("gotowe")
-
-      //TODO: join wyglada zle, ale dlatego, ze slownik zawiera wszystkie kraje, natomiast stream z Joba 2 ograniczono do 20 pierwszych IDkow - trzeba wysylac wszystkie
+      //TODO: usunac limit z Joba 2 - done
       val generateUUID = udf((a:Any) => a match {
-        case a:String => UUID.nameUUIDFromBytes(a.getBytes).toString
+        //TODO dac random UUID - done
+        case a:String => UUID.randomUUID().toString
         case _ => UUID.randomUUID().toString
       })
       val withUUID = joined.withColumn("_id",generateUUID($"country"))
@@ -142,7 +140,6 @@ import scala.collection.JavaConverters._
 //      withUUID.saveToMapRDB("/tables/movie_enriched_with_country")
 //      println("done")
 
-      //TODO: tu mozna uzyc Kafka Serializera, Mateusz wysylal po pierwszym CR
       withUUID
         .selectExpr("CAST(_id AS STRING) AS key", "to_json(struct(*)) AS value")
         .write.format("kafka")
@@ -157,7 +154,7 @@ import scala.collection.JavaConverters._
       val newDF = explodedDF.withColumn("_id", functions.concat(explodedDF("_id").cast(StringType),
         lit("_").cast(StringType),
         explodedDF("genre").cast(StringType)))
-
+//TODO zapisac tez dane o filmach
       val newnewDF = newDF.select("_id")
 //      newnewDF.show()
       newnewDF.saveToMapRDB("/tables/genre")
@@ -169,5 +166,4 @@ import scala.collection.JavaConverters._
     ssc.awaitTermination()
     ssc.stop(stopSparkContext = true, stopGracefully = true)
   }
-    //TODO: REFACTOR REFACTOR REFACTOR
 }
