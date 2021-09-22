@@ -1,6 +1,6 @@
 package com.example
 
-import com.mapr.db.spark.sql.{toMapRDBDataFrame, toSparkSessionFunctions}
+import com.mapr.db.spark.sql.toSparkSessionFunctions
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.functions.{explode, lit, udf}
@@ -9,26 +9,26 @@ import org.apache.spark.sql.{DataFrame, SparkSession, functions}
 import org.apache.spark.streaming.kafka09.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.ojai.store.{DriverManager, Query}
+import org.ojai.store.DriverManager
 import org.ojai.{Document, DocumentStream, Value}
 
 import java.util.UUID
 import scala.collection.JavaConverters._
 
-  object App {
+object App {
 
-    def tryGetInt(x:Document, field:String): Option[Int] = x.getValue(field).getType.getCode match {
-      case none if none == Value.Type.NULL.getCode => None
-      case int if int == Value.Type.INT.getCode => Some(x.getInt(field))
-    }
-    def tryGetString(x:Document, field:String): Option[String] = x.getValue(field).getType.getCode match {
-      case none if none == Value.Type.NULL.getCode => None
-      case str if str == Value.Type.STRING.getCode => Some(x.getString(field))
-    }
-    def tryGetDouble(x:Document, field:String): Option[Double] = x.getValue(field).getType.getCode match {
-      case none if none == Value.Type.NULL.getCode => None
-      case double if double == Value.Type.DOUBLE.getCode => Some(x.getDouble(field))
-    }
+  def tryGetInt(x:Document, field:String): Option[Int] = x.getValue(field).getType.getCode match {
+    case none if none == Value.Type.NULL.getCode => None
+    case int if int == Value.Type.INT.getCode => Some(x.getInt(field))
+  }
+  def tryGetString(x:Document, field:String): Option[String] = x.getValue(field).getType.getCode match {
+    case none if none == Value.Type.NULL.getCode => None
+    case str if str == Value.Type.STRING.getCode => Some(x.getString(field))
+  }
+  def tryGetDouble(x:Document, field:String): Option[Double] = x.getValue(field).getType.getCode match {
+    case none if none == Value.Type.NULL.getCode => None
+    case double if double == Value.Type.DOUBLE.getCode => Some(x.getDouble(field))
+  }
 
   def main(args: Array[String]) = {
 
@@ -53,30 +53,30 @@ import scala.collection.JavaConverters._
       "spark.kafka.poll.time" -> pollTimeout
     )
 
-    val consumerStrategy = ConsumerStrategies.Subscribe[String, String](Set("/apps/stream:read"), kafkaParams)
+    val consumerStrategy = ConsumerStrategies.Subscribe[String, String](Set("/apps/stream:read2"), kafkaParams)
     val messagesDStream = KafkaUtils.createDirectStream[String, String](
       ssc, LocationStrategies.PreferConsistent, consumerStrategy)
 
-//  optymalne - print executorami
-//    messagesDStream.foreachRDD(batchRDD => {
-//      batchRDD.foreachPartition {
-//        iter => {
-//          val elemsOnParition = iter.toList
-//          elemsOnParition.map { elem =>
-//            println(elem.value)
+    //  optymalne - print executorami
+//        messagesDStream.foreachRDD(batchRDD => {
+//          batchRDD.foreachPartition {
+//            iter => {
+//              val elemsOnParition = iter.toList
+//              elemsOnParition.map { elem =>
+//                println(elem.value)
+//              }
+//            }
 //          }
-//        }
-//      }
-//    })
+//        })
 
-//    nieoptymalne - print batchowo na driverze
-//    val valuesDStream = messagesDStream.map(_.value())
-//    valuesDStream.count
-//    valuesDStream.print
+    //    nieoptymalne - print batchowo na driverze
+    //    val valuesDStream = messagesDStream.map(_.value())
+    //    valuesDStream.count
+    //    valuesDStream.print
 
-
-    val sadStream = messagesDStream.mapPartitions (iterator => {
-      //TODO connection utworzyc raz - done
+    val sadStream = messagesDStream.mapPartitions {
+      iterator => {
+        //TODO: connection i store utworzyc raz - error
       val connection = DriverManager.getConnection("ojai:mapr:")
       val store = connection.getStore("/tables/movie")
 
@@ -84,11 +84,11 @@ import scala.collection.JavaConverters._
         .map(record => record.value())
         .toList
         .asJava
-      val query: Query = connection
+      val query = connection
         .newQuery()
         .where(connection.newCondition()
-            .in("_id", list)
-            .build())
+          .in("_id", list)
+          .build())
         .build()
 
       val result: DocumentStream = store.findQuery(query)
@@ -107,57 +107,53 @@ import scala.collection.JavaConverters._
 
       res1
     }
-    )
+    }
 
-//    val spark = SparkSession.builder.getOrCreate()
+    //TODO odczyt slownika krajow powinien byc wykonywany raz - done
+    //TODO zmienic nazwe klasy Dictionary - done
+    val spark = SparkSession.builder().getOrCreate()
+    import spark.implicits._
+    val dictionaryDS = spark.loadFromMapRDB("/tables/country").as[CountryDictionary]
 
     sadStream.foreachRDD(batchRDD => {
-      //TODO wywalic mapPartitions
+      //TODO usunac mapPartitions - done
       val futureDS = batchRDD
-      val spark = SparkSession.builder.config(futureDS.sparkContext.getConf).getOrCreate()
-      import spark.implicits._
       val incompleteFullMovies = futureDS.toDS()
-      incompleteFullMovies.show(10)
+//      incompleteFullMovies.show(10)
+//      dictionaryDS.show()
 
-      //TODO: odczyt powinien byc wykonywany raz
-      //TODO zmienic nazwe dictionary - done
-      val dictionaryOfCountries = spark.loadFromMapRDB("/tables/country").as[CountryDictionary]
+      //TODO usunac niepotrzebna zmienna - done
+      //TODO zmienic typ joina - done
+      val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, incompleteFullMovies("country_id") <=> dictionaryDS("_id"), "inner").drop("_id")
 
-      //TODO dropping niepotrzebna zmienna - done
-//      val dropping = incompleteFullMovies
-      //TODO inny typ joina
-      val joined: DataFrame = incompleteFullMovies.join(dictionaryOfCountries, incompleteFullMovies("country_id") <=> dictionaryOfCountries("_id"), "fullouter").drop("_id")
-
-      //TODO: usunac limit z Joba 2 - done
+      //TODO UUID powinno byc randomowe dla obu przypadkow - done
       val generateUUID = udf((a:Any) => a match {
-        //TODO dac random UUID - done
         case a:String => UUID.randomUUID().toString
         case _ => UUID.randomUUID().toString
       })
+
       val withUUID = joined.withColumn("_id",generateUUID($"country"))
 //      withUUID.show()
 //      withUUID.printSchema()
 //      withUUID.saveToMapRDB("/tables/movie_enriched_with_country")
-//      println("done")
 
-      withUUID
-        .selectExpr("CAST(_id AS STRING) AS key", "to_json(struct(*)) AS value")
-        .write.format("kafka")
-        .option("topic","/apps/stream:index")
-        .save()
+//      withUUID
+//        .selectExpr("CAST(_id AS STRING) AS key", "to_json(struct(*)) AS value")
+//        .write.format("kafka")
+//        .option("topic","/apps/stream:index")
+//        .save()
 
       val explodedDF = withUUID
         .withColumn("genre",functions.split($"genre",", "))
         .withColumn("genre",explode($"genre"))
-
 //      explodedDF.show()
+
+      //TODO zapisac caly df z filmami i nowym id - done
       val newDF = explodedDF.withColumn("_id", functions.concat(explodedDF("_id").cast(StringType),
         lit("_").cast(StringType),
         explodedDF("genre").cast(StringType)))
-//TODO zapisac tez dane o filmach
-      val newnewDF = newDF.select("_id")
-//      newnewDF.show()
-      newnewDF.saveToMapRDB("/tables/genre")
+//      newDF.show()
+//      newDF.saveToMapRDB("/tables/genre")
 
     }
     )
