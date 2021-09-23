@@ -74,16 +74,21 @@ object App {
     //    valuesDStream.count
     //    valuesDStream.print
 
+    val connection = DriverManager.getConnection("ojai:mapr:")
+    val store = connection.getStore("/tables/movie")
+
     val sadStream = messagesDStream.mapPartitions {
       iterator => {
-        //TODO: connection i store utworzyc raz - error
-      val connection = DriverManager.getConnection("ojai:mapr:")
-      val store = connection.getStore("/tables/movie")
+        //TODO: connection i store utworzyc raz - doczytac o partycjach, poszukac jak utworzyc to raz per executor
+        //TODO zrozumiec kod, gdzie sie jaka czesc wykonuje
+//      val connection = DriverManager.getConnection("ojai:mapr:")
+//      val store = connection.getStore("/tables/movie")
 
       val list = iterator
         .map(record => record.value())
         .toList
         .asJava
+        //TODO serializacja, deserializacja, interface serializable w javie
       val query = connection
         .newQuery()
         .where(connection.newCondition()
@@ -109,28 +114,21 @@ object App {
     }
     }
 
-    //TODO odczyt slownika krajow powinien byc wykonywany raz - done
-    //TODO zmienic nazwe klasy Dictionary - done
     val spark = SparkSession.builder().getOrCreate()
     import spark.implicits._
     val dictionaryDS = spark.loadFromMapRDB("/tables/country").as[CountryDictionary]
 
     sadStream.foreachRDD(batchRDD => {
-      //TODO usunac mapPartitions - done
       val futureDS = batchRDD
       val incompleteFullMovies = futureDS.toDS()
 //      incompleteFullMovies.show(10)
 //      dictionaryDS.show()
 
-      //TODO usunac niepotrzebna zmienna - done
-      //TODO zmienic typ joina - done
-      val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, incompleteFullMovies("country_id") <=> dictionaryDS("_id"), "inner").drop("_id")
+      //TODO w jaki sposob rozbic df na zmatchowane i niezmatchowane, sparkowo
+      val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, incompleteFullMovies("country_id") <=> dictionaryDS("_id"), "left_outer").drop("_id")
 
-      //TODO UUID powinno byc randomowe dla obu przypadkow - done
-      val generateUUID = udf((a:Any) => a match {
-        case a:String => UUID.randomUUID().toString
-        case _ => UUID.randomUUID().toString
-      })
+      val generateUUID = udf((a:Any) => UUID.randomUUID().toString
+      )
 
       val withUUID = joined.withColumn("_id",generateUUID($"country"))
 //      withUUID.show()
@@ -148,13 +146,11 @@ object App {
         .withColumn("genre",explode($"genre"))
 //      explodedDF.show()
 
-      //TODO zapisac caly df z filmami i nowym id - done
       val newDF = explodedDF.withColumn("_id", functions.concat(explodedDF("_id").cast(StringType),
         lit("_").cast(StringType),
         explodedDF("genre").cast(StringType)))
 //      newDF.show()
 //      newDF.saveToMapRDB("/tables/genre")
-
     }
     )
 
