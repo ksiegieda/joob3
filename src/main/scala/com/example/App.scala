@@ -15,6 +15,11 @@ import org.ojai.{Document, DocumentStream, Value}
 import java.util.UUID
 import scala.collection.JavaConverters._
 
+object ConnectionObject {
+  lazy val connection = DriverManager.getConnection("ojai:mapr:")
+  lazy val store = connection.getStore("/tables/movie")
+}
+
 object App {
 
   def tryGetInt(x:Document, field:String): Option[Int] = x.getValue(field).getType.getCode match {
@@ -74,29 +79,25 @@ object App {
     //    valuesDStream.count
     //    valuesDStream.print
 
-    val connection = DriverManager.getConnection("ojai:mapr:")
-    val store = connection.getStore("/tables/movie")
-
     val sadStream = messagesDStream.mapPartitions {
       iterator => {
-        //TODO: connection i store utworzyc raz - doczytac o partycjach, poszukac jak utworzyc to raz per executor
-        //TODO zrozumiec kod, gdzie sie jaka czesc wykonuje
-//      val connection = DriverManager.getConnection("ojai:mapr:")
-//      val store = connection.getStore("/tables/movie")
+
+        //TODO: connection i store utworzyc raz - doczytac o partycjach, poszukac jak utworzyc to raz per executor - done
+        //TODO zrozumiec kod, gdzie sie jaka czesc wykonuje - done
 
       val list = iterator
         .map(record => record.value())
         .toList
         .asJava
         //TODO serializacja, deserializacja, interface serializable w javie
-      val query = connection
+      val query = ConnectionObject.connection
         .newQuery()
-        .where(connection.newCondition()
+        .where(ConnectionObject.connection.newCondition()
           .in("_id", list)
           .build())
         .build()
 
-      val result: DocumentStream = store.findQuery(query)
+      val result: DocumentStream = ConnectionObject.store.findQuery(query)
       val res1 = result.asScala.toList.map(x => Movie(x.getString("_id"), x.getString("imdb_title_id"), x.getString("title"),
         x.getString("original_title"), tryGetInt(x, "year"), x.getString("date_published"),
         x.getString("genre"), tryGetInt(x, "duration"), tryGetString(x, "country_id"),
@@ -107,8 +108,8 @@ object App {
         tryGetString(x, "worlwide_gross_income"), tryGetDouble(x, "metascore"),
         tryGetDouble(x, "reviews_from_users"), tryGetDouble(x, "reviews_from_critics"))).toIterator
 
-      connection.close()
-      store.close()
+//      connection.close()
+//      store.close()
 
       res1
     }
@@ -117,6 +118,7 @@ object App {
     val spark = SparkSession.builder().getOrCreate()
     import spark.implicits._
     val dictionaryDS = spark.loadFromMapRDB("/tables/country").as[CountryDictionary]
+    dictionaryDS.show()
 
     sadStream.foreachRDD(batchRDD => {
       val futureDS = batchRDD
@@ -124,11 +126,10 @@ object App {
 //      incompleteFullMovies.show(10)
 //      dictionaryDS.show()
 
-      //TODO w jaki sposob rozbic df na zmatchowane i niezmatchowane, sparkowo
+      //TODO w jaki sposob rozbic df na zmatchowane i niezmatchowane, sparkowo (dac filter po kolumnach ze slownika)
       val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, incompleteFullMovies("country_id") <=> dictionaryDS("_id"), "left_outer").drop("_id")
 
-      val generateUUID = udf((a:Any) => UUID.randomUUID().toString
-      )
+      val generateUUID = udf((a:Any) => UUID.randomUUID().toString)
 
       val withUUID = joined.withColumn("_id",generateUUID($"country"))
 //      withUUID.show()
@@ -159,3 +160,4 @@ object App {
     ssc.stop(stopSparkContext = true, stopGracefully = true)
   }
 }
+
