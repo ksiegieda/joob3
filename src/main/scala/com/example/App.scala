@@ -16,8 +16,8 @@ import java.util.UUID
 import scala.collection.JavaConverters._
 
 object ConnectionObject {
-  lazy val connection = DriverManager.getConnection("ojai:mapr:")
-  lazy val store = connection.getStore("/tables/movie")
+  @transient lazy val connection = DriverManager.getConnection("ojai:mapr:")
+  @transient lazy val store = connection.getStore("/tables/movie")
 }
 
 object App {
@@ -89,7 +89,7 @@ object App {
         .map(record => record.value())
         .toList
         .asJava
-        //TODO serializacja, deserializacja, interface serializable w javie
+        //TODO serializacja, deserializacja, interface serializable w javie - done
       val query = ConnectionObject.connection
         .newQuery()
         .where(ConnectionObject.connection.newCondition()
@@ -126,12 +126,17 @@ object App {
 //      incompleteFullMovies.show(10)
 //      dictionaryDS.show()
 
-      //TODO w jaki sposob rozbic df na zmatchowane i niezmatchowane, sparkowo (dac filter po kolumnach ze slownika)
+      //TODO w jaki sposob rozbic df na zmatchowane i niezmatchowane, sparkowo - done
       val joined: DataFrame = incompleteFullMovies.join(dictionaryDS, incompleteFullMovies("country_id") <=> dictionaryDS("_id"), "left_outer").drop("_id")
 
+      val emptyMovies: DataFrame = joined.filter('country.isNull || 'country_id.isNull)
+//      emptyMovies.saveToMapRDB("/tables/countrylessMovies")
+      println("In this batch there are " + emptyMovies.count() + " empty movie records. Saved them to /tables/countrylessMovies.")
+      val goodMovies = joined.filter('country.isNotNull && 'country_id.isNotNull)
+//      goodMovies.show()
       val generateUUID = udf((a:Any) => UUID.randomUUID().toString)
 
-      val withUUID = joined.withColumn("_id",generateUUID($"country"))
+      val withUUID = goodMovies.withColumn("_id",generateUUID($"country"))
 //      withUUID.show()
 //      withUUID.printSchema()
 //      withUUID.saveToMapRDB("/tables/movie_enriched_with_country")
